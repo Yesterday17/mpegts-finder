@@ -218,42 +218,43 @@ pub fn handle_match(me: MatchSubcommand) -> anyhow::Result<()> {
     if result.is_empty() {
         println!("Error: segment not found");
     } else {
-        if result.len() > 1 {
-            println!("Warning: Multiple segments found. Printing information about the first one.")
-        } else {
-            println!("Segment found, here are some offsets of segments nearby:");
-        }
-        let index = result[0];
-        if index > 0 {
-            println!(
-                "Previous block: mtf cut --from={} --to={} <video> <output>",
-                hashes[index - 1].offset,
-                hashes[index].offset
-            );
-        }
-        if index < hashes.len() - 1 {
-            println!(
-                "Current block:  mtf cut --from={} --to={} <video> <output>",
-                hashes[index].offset,
-                hashes[index + 1].offset
-            );
-        } else {
-            println!(
-                "Current block:  mtf cut --from={} <video> <output>",
-                hashes[index].offset
-            );
-        }
-        if index < hashes.len() - 2 {
-            println!(
-                "Next block:     mtf cut --from={} --to={} <video> <output>",
-                hashes[index + 1].offset,
-                hashes[index + 2].offset
-            );
-        } else if index < hashes.len() - 1 {
-            println!(
-                "Next block:     mtf cut --from={} <video> <output>",
-                hashes[index + 1].offset
-            );
+        let mut counter = 0;
+
+        for index in result {
+            counter += 1;
+            println!("#{counter}:");
+            if index > 0 {
+                println!(
+                    "Previous block: mtf cut --from={} --to={} <video> <output>",
+                    hashes[index - 1].offset,
+                    hashes[index].offset
+                );
+            }
+            if index < hashes.len() - 1 {
+                println!(
+                    "Current block:  mtf cut --from={} --to={} <video> <output>",
+                    hashes[index].offset,
+                    hashes[index + 1].offset
+                );
+            } else {
+                println!(
+                    "Current block:  mtf cut --from={} <video> <output>",
+                    hashes[index].offset
+                );
+            }
+            if index < hashes.len() - 2 {
+                println!(
+                    "Next block:     mtf cut --from={} --to={} <video> <output>",
+                    hashes[index + 1].offset,
+                    hashes[index + 2].offset
+                );
+            } else if index < hashes.len() - 1 {
+                println!(
+                    "Next block:     mtf cut --from={} <video> <output>",
+                    hashes[index + 1].offset
+                );
+            }
+            println!();
         }
     }
 
