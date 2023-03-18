@@ -6,7 +6,7 @@ use std::{
     fs::File,
     hash::Hasher,
     io::{BufReader, Read, Seek, SeekFrom, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 struct MpegtsHeader {
@@ -59,12 +59,14 @@ pub struct HashSubcommand {
     video: PathBuf,
 }
 
-#[handler(HashSubcommand)]
-pub fn hash_handler(me: HashSubcommand) -> anyhow::Result<()> {
+fn do_hash<P>(video: P) -> anyhow::Result<Vec<TsSegment>>
+where
+    P: AsRef<Path>,
+{
     const BUFFER_SIZE: usize = 188 * 8;
 
     let mut buf = [0; BUFFER_SIZE];
-    let file = File::open(me.video)?;
+    let file = File::open(video.as_ref())?;
     let mut file = BufReader::new(file);
 
     let mut hasher = DefaultHasher::new();
@@ -112,10 +114,16 @@ pub fn hash_handler(me: HashSubcommand) -> anyhow::Result<()> {
         }
     }
 
+    Ok(segments)
+}
+
+#[handler(HashSubcommand)]
+pub fn hash_handler(me: HashSubcommand) -> anyhow::Result<()> {
+    let segments = do_hash(me.video)?;
     let result = serde_json::to_string_pretty(&segments)?;
     match me.output {
         Some(output_path) => {
-            File::create(output_path)?.write_all(buf.as_ref())?;
+            File::create(output_path)?.write_all(result.as_ref())?;
         }
         None => {
             println!("{result}");
@@ -127,17 +135,22 @@ pub fn hash_handler(me: HashSubcommand) -> anyhow::Result<()> {
 #[derive(Args, Debug, Clone)]
 pub struct MatchSubcommand {
     hashes: PathBuf,
-    hash: String,
+    segment: PathBuf,
 }
 
 #[handler(MatchSubcommand)]
 pub fn handle_match(me: MatchSubcommand) -> anyhow::Result<()> {
+    let segment_hashes = do_hash(me.segment)?;
+    if segment_hashes.len() > 1 {
+        panic!("Error: too many segments");
+    }
+
+    let segment_hash = segment_hashes[0].hash;
     let hashes: Vec<TsSegment> = serde_json::from_reader(File::open(me.hashes)?)?;
-    let hash = u64::from_str_radix(&me.hash, 10)?;
 
     let mut result = Vec::new();
     for (index, segment) in hashes.iter().enumerate() {
-        if segment.hash == hash {
+        if segment.hash == segment_hash {
             result.push(index);
         }
     }
@@ -149,16 +162,38 @@ pub fn handle_match(me: MatchSubcommand) -> anyhow::Result<()> {
     if result.is_empty() {
         println!("Error: segment not found");
     } else {
+        println!("Segment found, here are some offsets of segments nearby:");
         let index = result[0];
         if index > 0 {
-            println!("[-1] {}", hashes[index - 1].offset);
+            println!(
+                "Previous block: mtf cut --from={} --to={} <video> <output>",
+                hashes[index - 1].offset,
+                hashes[index].offset
+            );
         }
-        println!("[+0] {}", hashes[index].offset);
         if index < hashes.len() - 1 {
-            println!("[+1] {}", hashes[index + 1].offset);
+            println!(
+                "Current block:  mtf cut --from={} --to={} <video> <output>",
+                hashes[index].offset,
+                hashes[index + 1].offset
+            );
+        } else {
+            println!(
+                "Current block:  mtf cut --from={} <video> <output>",
+                hashes[index].offset
+            );
         }
         if index < hashes.len() - 2 {
-            println!("[+2] {}", hashes[index + 2].offset);
+            println!(
+                "Next block:     mtf cut --from={} --to={} <video> <output>",
+                hashes[index + 1].offset,
+                hashes[index + 2].offset
+            );
+        } else if index < hashes.len() - 1 {
+            println!(
+                "Next block:     mtf cut --from={} <video> <output>",
+                hashes[index + 1].offset
+            );
         }
     }
 
@@ -172,9 +207,8 @@ pub struct CutSubcommand {
     #[clap(long)]
     to: Option<u64>,
 
-    #[clap(short, long)]
-    output: PathBuf,
     video: PathBuf,
+    output: PathBuf,
 }
 
 #[handler(CutSubcommand)]
