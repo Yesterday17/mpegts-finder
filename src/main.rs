@@ -1,13 +1,13 @@
+use clap::{Args, Parser};
+use clap_handler::{handler, Handler};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap, HashSet},
+    collections::hash_map::DefaultHasher,
     fs::File,
     hash::Hasher,
-    io::{BufReader, Read, Seek, SeekFrom},
-    path::Path,
+    io::{BufReader, Read, Seek, SeekFrom, Write},
+    path::PathBuf,
 };
-
-const BUFFER_SIZE: usize = 188 * 8;
 
 struct MpegtsHeader {
     is_start: bool,
@@ -20,7 +20,7 @@ impl MpegtsHeader {
         R: Read + Seek,
     {
         let mut buf = [0u8; 4];
-        let got = input.read_exact(&mut buf)?;
+        input.read_exact(&mut buf)?;
         let header = u32::from_be_bytes(buf);
         assert!(header & 0xff000000 == 0x47000000, "sync byte not found");
 
@@ -37,12 +37,35 @@ struct TsSegment {
     offset: u64,
 }
 
-fn main() -> anyhow::Result<()> {
+#[derive(Parser, Handler, Debug, Clone)]
+#[clap(name = "mpegts-finder", author)]
+struct MTF {
+    #[clap(subcommand)]
+    subcommand: Subcommand,
+}
+
+#[derive(Parser, Handler, Debug, Clone)]
+pub enum Subcommand {
+    Hash(HashSubcommand),
+    Cut(CutSubcommand),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct HashSubcommand {
+    #[clap(short, long)]
+    output: Option<PathBuf>,
+
+    video: PathBuf,
+}
+
+#[handler(HashSubcommand)]
+pub fn hash_handler(me: HashSubcommand) -> anyhow::Result<()> {
+    const BUFFER_SIZE: usize = 188 * 8;
+
     let mut buf = [0; BUFFER_SIZE];
-    let mut file = File::open("/home/yesterday17/视频/2023-03-18_14-50-06.ts")?;
+    let file = File::open(me.video)?;
     let mut file = BufReader::new(file);
 
-    let mut count = 0;
     let mut hasher = DefaultHasher::new();
     let mut prev_segment_offset: Option<u64> = None;
 
@@ -81,7 +104,6 @@ fn main() -> anyhow::Result<()> {
 
                 let offset = file.stream_position()? - 4;
                 prev_segment_offset = Some(offset);
-                count += 1;
             }
 
             hasher.write_u16(header.pid);
@@ -89,24 +111,45 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    println!("{}", serde_json::to_string_pretty(&segments)?);
+    let result = serde_json::to_string_pretty(&segments)?;
+    match me.output {
+        Some(output_path) => {
+            File::create(output_path)?.write_all(buf.as_ref())?;
+        }
+        None => {
+            println!("{result}");
+        }
+    }
     Ok(())
 }
 
-fn cut<P1, P2>(input: P1, output: P2, start: u64, end: Option<u64>) -> anyhow::Result<()>
-where
-    P1: AsRef<Path>,
-    P2: AsRef<Path>,
-{
-    let mut file = File::open(input.as_ref())?;
-    file.seek(SeekFrom::Start(start))?;
+#[derive(Args, Debug, Clone)]
+pub struct CutSubcommand {
+    #[clap(long)]
+    from: u64,
+    #[clap(long)]
+    to: Option<u64>,
 
-    let mut reader: Box<dyn Read> = match end {
-        Some(end) => Box::new(file.take(end - start)),
+    #[clap(short, long)]
+    output: PathBuf,
+    video: PathBuf,
+}
+
+#[handler(CutSubcommand)]
+fn cut(me: CutSubcommand) -> anyhow::Result<()> {
+    let mut file = File::open(me.video)?;
+    file.seek(SeekFrom::Start(me.from))?;
+
+    let mut reader: Box<dyn Read> = match me.to {
+        Some(end) => Box::new(file.take(end - me.from)),
         None => Box::new(file),
     };
-    let writer = &mut File::create(output.as_ref())?;
+    let writer = &mut File::create(me.output)?;
     std::io::copy(&mut reader, writer)?;
 
     Ok(())
+}
+
+fn main() -> anyhow::Result<()> {
+    MTF::parse().run()
 }
