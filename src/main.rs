@@ -88,11 +88,11 @@ fn do_hash<P>(video: P) -> anyhow::Result<Vec<TsSegment>>
 where
     P: AsRef<Path>,
 {
-    const BUFFER_SIZE: usize = 188 * 8;
+    const BUFFER_SIZE: usize = 188;
 
     let mut buf = [0; BUFFER_SIZE];
     let file = File::open(video.as_ref())?;
-    let mut file = BufReader::new(file);
+    let mut file = BufReader::with_capacity(BUFFER_SIZE * 64, file);
 
     let mut hasher = DefaultHasher::new();
     let mut prev_segment_offset: Option<u64> = None;
