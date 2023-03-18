@@ -6,6 +6,7 @@ use std::{
     fs::File,
     hash::Hasher,
     io::{BufReader, Read, Seek, SeekFrom, Write},
+    ops::Index,
     path::{Path, PathBuf},
 };
 
@@ -35,6 +36,30 @@ impl MpegtsHeader {
 struct TsSegment {
     hash: u64,
     offset: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct HashFile {
+    file: PathBuf,
+    segments: Vec<TsSegment>,
+}
+
+impl HashFile {
+    fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    fn iter(&self) -> std::slice::Iter<TsSegment> {
+        self.segments.iter()
+    }
+}
+
+impl Index<usize> for HashFile {
+    type Output = TsSegment;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.segments[index]
+    }
 }
 
 #[derive(Parser, Handler, Debug, Clone)]
@@ -119,8 +144,11 @@ where
 
 #[handler(HashSubcommand)]
 pub fn hash_handler(me: HashSubcommand) -> anyhow::Result<()> {
-    let segments = do_hash(me.video)?;
-    let result = serde_json::to_string_pretty(&segments)?;
+    let segments = do_hash(&me.video)?;
+    let result = serde_json::to_string_pretty(&HashFile {
+        file: me.video,
+        segments,
+    })?;
     match me.output {
         Some(output_path) => {
             File::create(output_path)?.write_all(result.as_ref())?;
@@ -140,13 +168,13 @@ pub struct MatchSubcommand {
 
 #[handler(MatchSubcommand)]
 pub fn handle_match(me: MatchSubcommand) -> anyhow::Result<()> {
-    let segment_hashes = do_hash(me.segment)?;
+    let segment_hashes = do_hash(&me.segment)?;
     if segment_hashes.len() > 1 {
         panic!("Error: too many segments");
     }
 
     let segment_hash = segment_hashes[0].hash;
-    let hashes: Vec<TsSegment> = serde_json::from_reader(File::open(me.hashes)?)?;
+    let hashes: HashFile = serde_json::from_reader(File::open(me.hashes)?)?;
 
     let mut result = Vec::new();
     for (index, segment) in hashes.iter().enumerate() {
@@ -155,14 +183,46 @@ pub fn handle_match(me: MatchSubcommand) -> anyhow::Result<()> {
         }
     }
 
-    if result.len() > 1 {
-        unimplemented!();
-    }
+    let result = if result.len() > 1 {
+        let mut new_result = Vec::new();
+        let segment_length = me.segment.metadata()?.len();
+        let mut segment_file = File::open(&me.segment)?;
+        let mut segment_buffer = Vec::with_capacity(segment_length as usize);
+        segment_file.read_exact(&mut segment_buffer)?;
+
+        for index in result {
+            let start = hashes[index].offset;
+            let end = if index + 1 == hashes.len() {
+                hashes.file.metadata()?.len()
+            } else {
+                hashes[index + 1].offset
+            };
+
+            if segment_length != end - start {
+                continue;
+            }
+
+            let mut file = File::open(&hashes.file)?;
+            file.seek(SeekFrom::Start(start))?;
+            let mut buffer = Vec::with_capacity(segment_length as usize);
+            file.read_exact(&mut buffer)?;
+            if buffer == segment_buffer {
+                new_result.push(index);
+            }
+        }
+        new_result
+    } else {
+        result
+    };
 
     if result.is_empty() {
         println!("Error: segment not found");
     } else {
-        println!("Segment found, here are some offsets of segments nearby:");
+        if result.len() > 1 {
+            println!("Warning: Multiple segments found. Printing information about the first one.")
+        } else {
+            println!("Segment found, here are some offsets of segments nearby:");
+        }
         let index = result[0];
         if index > 0 {
             println!(
