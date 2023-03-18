@@ -1,5 +1,7 @@
 /target
 .idea
+
 *.ts
 *.decrypt
+*.json
 output

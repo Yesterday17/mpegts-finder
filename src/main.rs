@@ -48,6 +48,7 @@ struct MTF {
 pub enum Subcommand {
     Hash(HashSubcommand),
     Cut(CutSubcommand),
+    Match(MatchSubcommand),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -124,6 +125,47 @@ pub fn hash_handler(me: HashSubcommand) -> anyhow::Result<()> {
 }
 
 #[derive(Args, Debug, Clone)]
+pub struct MatchSubcommand {
+    hashes: PathBuf,
+    hash: String,
+}
+
+#[handler(MatchSubcommand)]
+pub fn handle_match(me: MatchSubcommand) -> anyhow::Result<()> {
+    let hashes: Vec<TsSegment> = serde_json::from_reader(File::open(me.hashes)?)?;
+    let hash = u64::from_str_radix(&me.hash, 10)?;
+
+    let mut result = Vec::new();
+    for (index, segment) in hashes.iter().enumerate() {
+        if segment.hash == hash {
+            result.push(index);
+        }
+    }
+
+    if result.len() > 1 {
+        unimplemented!();
+    }
+
+    if result.is_empty() {
+        println!("Error: segment not found");
+    } else {
+        let index = result[0];
+        if index > 0 {
+            println!("[-1] {}", hashes[index - 1].offset);
+        }
+        println!("[+0] {}", hashes[index].offset);
+        if index < hashes.len() - 1 {
+            println!("[+1] {}", hashes[index + 1].offset);
+        }
+        if index < hashes.len() - 2 {
+            println!("[+2] {}", hashes[index + 2].offset);
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Args, Debug, Clone)]
 pub struct CutSubcommand {
     #[clap(long)]
     from: u64,
@@ -136,7 +178,7 @@ pub struct CutSubcommand {
 }
 
 #[handler(CutSubcommand)]
-fn cut(me: CutSubcommand) -> anyhow::Result<()> {
+fn handle_cut(me: CutSubcommand) -> anyhow::Result<()> {
     let mut file = File::open(me.video)?;
     file.seek(SeekFrom::Start(me.from))?;
 
